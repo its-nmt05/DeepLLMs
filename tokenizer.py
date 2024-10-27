@@ -28,12 +28,6 @@ class BPETokenizer:
                 i += 1
         return new_ids
         
-    def display_merges(self):
-        for item in self.char_merges.items():
-            if item is not None:
-                ch1, ch2 = item[0]
-                print(f"'{ch1}' + '{ch2}' --> {item[1]}")
-        
     # fit the model on the input vocab
     def fit(self, text):
         merges = {}
