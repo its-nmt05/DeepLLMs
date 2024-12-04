@@ -1,100 +1,98 @@
-import torch.nn as nn
 import torch
-import math
+import torch.nn as nn
+import torch.nn.functional as F
 
+# residual(ResNet) block with optional skip connection
+class residualBlock(nn.Module):
 
-class Block(nn.Module):
-
-    def __init__(self, in_ch, out_ch, time_emb_dim, up=False):
+    def __init__(self, in_ch, out_ch, mid_ch=None, residual=False):
         super().__init__()
-        self.time_mlp = nn.Linear(time_emb_dim, out_ch)
-        if up:
-            self.conv1 = nn.Conv2d(2*in_ch, out_ch, 3, padding=1)
-            self.transform = nn.ConvTranspose2d(out_ch, out_ch, 4, 2, 1)
-        else:
-            self.conv1 = nn.Conv2d(in_ch, out_ch, 3, padding=1)
-            self.transform = nn.Conv2d(out_ch, out_ch, 4, 2, 1)
-        self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
-        self.bnorm1 = nn.BatchNorm2d(out_ch)
-        self.bnorm2 = nn.BatchNorm2d(out_ch)
-        self.relu = nn.ReLU()
-
-    def forward(self, x, t):
-        # First Conv
-        h = self.bnorm1(self.relu(self.conv1(x)))
-        # Time embedding
-        time_emb = self.relu(self.time_mlp(t))
-        # Extend last 2 dimensions
-        time_emb = time_emb[(..., ) + (None, ) * 2]
-        # Add time channel
-        h = h + time_emb
-        # Second Conv
-        h = self.bnorm2(self.relu(self.conv2(h)))
-        # Down or Upsample
-        return self.transform(h)
-
-
-class PositionalEmbedding(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.dim = dim
-
-    def forward(self, time):
-        device = time.device
-        half_dim = self.dim // 2
-        embeddings = math.log(10000) / (half_dim - 1)
-        embeddings = torch.exp(torch.arange(
-            half_dim, device=device) * -embeddings)
-        embeddings = time[:, None] * embeddings[None, :]
-        embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
-        return embeddings
-
-
-class Unet(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-        image_channels = 3
-        down_channels = (64, 128, 256, 512, 1024)
-        up_channels = (1024, 512, 256, 128, 64)
-        out_dim = 3
-        time_emb_dim = 32
-
-        # Time embedding
-        self.time_mlp = nn.Sequential(
-            PositionalEmbedding(time_emb_dim),
-            nn.Linear(time_emb_dim, time_emb_dim),
-            nn.ReLU()
+        self.residual = residual
+        if not mid_ch:
+            mid_ch = out_ch
+        self.double_conv = nn.Sequential(
+            nn.Conv2d(in_ch, mid_ch, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(mid_ch),
+            nn.GELU(),
+            nn.Conv2d(mid_ch, out_ch, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_ch),
         )
 
-        # Initial projection
-        self.conv0 = nn.Conv2d(image_channels, down_channels[0], 3, padding=1)
+    def forward(self, x):
+        if self.residual:
+            return F.gelu(x + self.double_conv(x))
+        else:
+            return self.double_conv(x)
 
-        # Downsample
-        self.downs = nn.ModuleList([Block(down_channels[i], down_channels[i+1],
-                                    time_emb_dim)
-                                    for i in range(len(down_channels)-1)])
-        # Upsample
-        self.ups = nn.ModuleList([Block(up_channels[i], up_channels[i+1],
-                                        time_emb_dim, up=True)
-                                  for i in range(len(up_channels)-1)])
 
-        # Edit: Corrected a bug found by Jakub C (see YouTube comment)
-        self.output = nn.Conv2d(up_channels[-1], out_dim, 1)
+class attentionBlock(nn.Module):
 
-    def forward(self, x, timestep):
-        # Embedd time
-        t = self.time_mlp(timestep)
-        # Initial conv
-        x = self.conv0(x)
-        # Unet
-        residual_inputs = []
-        for down in self.downs:
-            x = down(x, t)
-            residual_inputs.append(x)
-        for up in self.ups:
-            residual_x = residual_inputs.pop()
-            # Add residual x as additional channels
-            x = torch.cat((x, residual_x), dim=1)
-            x = up(x, t)
-        return self.output(x)
+    def __init__(self, channels, size):
+        super().__init__()
+        self.channels = channels
+        self.size = size
+        self.ln = nn.LayerNorm([channels])
+        self.mha = nn.MultiheadAttention(channels, 4, batch_first=True)
+        self.ffwd = nn.Sequential(
+            nn.LayerNorm([channels]),
+            nn.Linear(channels, channels),
+            nn.GELU(),
+            nn.Linear(channels, channels)
+        )
+
+    def forward(self, x):
+        # flatten spatial dims for MHA
+        x = x.view(-1, self.channels, self.size * self.size).swapaxes(1, 2)
+        x_ln = self.ln(x)
+        attention_scores, _ = self.mha(x_ln, x_ln, x_ln)
+        attention_scores = attention_scores + x
+        attention_scores = self.ffwd(attention_scores) + attention_scores
+        # unflatten spatial dims
+        return attention_scores.swapaxes(2, 1).view(-1, self.channels, self.size, self.size)
+
+
+class downSampleBlock(nn.Module):
+
+    def __init__(self, in_ch, out_ch, emb_dim=256):
+        super().__init__()
+        self.maxpool = nn.MaxPool2d(2)
+        self.res1 = residualBlock(in_ch, in_ch, residual=True)
+        self.res2 = residualBlock(in_ch, out_ch)
+
+        self.emb_layer = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(emb_dim, out_ch)
+        )
+
+    def forward(self, x, t):
+        x = self.maxpool(x)
+        x = self.res1(x)
+        x = self.res2(x)
+        emb = self.emb_layer(t)[:, :, None, None].repeat(
+            # expand emb spatially to match dims of x
+            1, 1, x.shape[-2], x.shape[-1])
+        return x + emb
+
+
+class upSampleBlock(nn.Module):
+
+    def __init__(self, in_ch, out_ch, emb_dim=256):
+        super().__init__()
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        self.res1 = residualBlock(in_ch, in_ch, residual=True)
+        self.res2 = residualBlock(in_ch, out_ch, in_ch // 2)
+
+        self.emb_layer = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(emb_dim, out_ch)
+        )
+
+    def forward(self, x, skip_x, t):
+        x = self.upsample(x)
+        x = torch.cat([x, skip_x], dim=1)
+        x = self.res1(x)
+        x = self.res2(x)
+        emb = self.emb_layer(t)[:, :, None, None].repeat(
+            # expand emb spatially to match dims of x
+            1, 1, x.shape[-2], x.shape[-1])
+        return x + emb

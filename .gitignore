@@ -2,3 +2,5 @@
 __pycache__/
 diffusion/cifar-10-python.tar.gz
 diffusion/cifar-10-batches-py/
+
+dataset/

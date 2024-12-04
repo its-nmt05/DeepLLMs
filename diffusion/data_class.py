@@ -1,6 +1,7 @@
 import torch
 import torch.utils
 import torch.utils.data
+from torch.utils.data import DataLoader, Subset
 import torchvision
 from torchvision import transforms
 import numpy as np
@@ -9,8 +10,10 @@ import matplotlib.pyplot as plt
 
 class DataClass:
 
-    def __init__(self, img_size):
+    def __init__(self, batch_size, img_size, num_img):
+        self.BATCH_SIZE = batch_size
         self.IMG_SIZE = img_size
+        self.NUM_IMG = num_img
 
     def load_transformed_dataset(self):
         data_transforms = [
@@ -20,22 +23,18 @@ class DataClass:
             transforms.ToTensor(),
             transforms.Lambda(lambda t: (t * 2) - 1)  # Scaled b/w [-1, 1]
         ]
-
         data_transform = transforms.Compose(data_transforms)
-
-        train = torchvision.datasets.CIFAR10(
-            root='.', download=True, transform=data_transform)
-        test = torchvision.datasets.CIFAR10(root=".", download=True,
-                                                 transform=data_transform, train=False)
-
-        return torch.utils.data.ConcatDataset([train, test])
+        dataset = torchvision.datasets.ImageFolder(root='./dataset', transform=data_transform)
+        indices = torch.randperm(len(dataset))[:self.NUM_IMG]
+        subset = Subset(dataset, indices)  # take only a subset of the dataset
+        return DataLoader(subset, batch_size=self.BATCH_SIZE, shuffle=True)
 
     def show_tensor_image(self, image):
         reverse_transforms = transforms.Compose([
             transforms.Lambda(lambda t: (t + 1) / 2),  # [-1, 1] -> [0, 1]
             transforms.Lambda(lambda t: t.permute(1, 2, 0)),  # (C, H, W) -> (H, W, C)
             transforms.Lambda(lambda t: t * 255.0),   # [0, 1] -> [0, 255]
-            transforms.Lambda(lambda t: t.numpy().astype(np.uint8)),
+            transforms.Lambda(lambda t: t.to('cpu').numpy().astype(np.uint8)),
             transforms.ToPILImage()
         ])
 
