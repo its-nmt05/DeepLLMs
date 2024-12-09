@@ -15,30 +15,32 @@ class DataClass:
         self.IMG_SIZE = img_size
         self.NUM_IMG = num_img
 
-    def load_transformed_dataset(self):
-        data_transforms = [
+    def load_transformed_dataset(self, dataset_path='./dataset'):
+        data_transform = transforms.Compose([
             transforms.Resize((self.IMG_SIZE, self.IMG_SIZE)),
-            transforms.RandomHorizontalFlip(),
-            # convert the images to tensor. Scales to [0, 1]
-            transforms.ToTensor(),
+            transforms.ToTensor(),  # convert the images to tensor. Scales to [0, 1]
             transforms.Lambda(lambda t: (t * 2) - 1)  # Scaled b/w [-1, 1]
-        ]
-        data_transform = transforms.Compose(data_transforms)
-        dataset = torchvision.datasets.ImageFolder(root='./dataset', transform=data_transform)
+        ])
+        dataset = torchvision.datasets.ImageFolder(
+            root=dataset_path, transform=data_transform)
         indices = torch.randperm(len(dataset))[:self.NUM_IMG]
         subset = Subset(dataset, indices)  # take only a subset of the dataset
         return DataLoader(subset, batch_size=self.BATCH_SIZE, shuffle=True)
 
-    def show_tensor_image(self, image):
+    def show_tensor_image(self, img_tensor, save=False, output_dir=None):
         reverse_transforms = transforms.Compose([
             transforms.Lambda(lambda t: (t + 1) / 2),  # [-1, 1] -> [0, 1]
-            transforms.Lambda(lambda t: t.permute(1, 2, 0)),  # (C, H, W) -> (H, W, C)
+            transforms.Lambda(lambda t: t.permute(1, 2, 0)
+                              ),  # (C, H, W) -> (H, W, C)
             transforms.Lambda(lambda t: t * 255.0),   # [0, 1] -> [0, 255]
             transforms.Lambda(lambda t: t.to('cpu').numpy().astype(np.uint8)),
             transforms.ToPILImage()
         ])
 
         # Take only first image of a batch
-        if len(image.shape) == 4:
-            image = image[0, :, :, :]
-        plt.imshow(reverse_transforms(image))
+        if len(img_tensor.shape) == 4:
+            img_tensor = img_tensor[0, :, :, :]
+        image = reverse_transforms(img_tensor)
+        if save and output_dir is not None:
+            image.save(output_dir, format='png')
+        plt.imshow(image)
