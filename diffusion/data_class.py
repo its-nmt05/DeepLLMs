@@ -18,11 +18,13 @@ class DataClass:
     def load_transformed_dataset(self, dataset_path='./dataset'):
         data_transform = transforms.Compose([
             transforms.Resize((self.IMG_SIZE, self.IMG_SIZE)),
+            transforms.Grayscale(num_output_channels=1),
             transforms.ToTensor(),  # convert the images to tensor. Scales to [0, 1]
             transforms.Lambda(lambda t: (t * 2) - 1)  # Scaled b/w [-1, 1]
         ])
-        dataset = torchvision.datasets.ImageFolder(
-            root=dataset_path, transform=data_transform)
+        # dataset = torchvision.datasets.ImageFolder(
+        #     root=dataset_path, transform=data_transform)
+        dataset = torchvision.datasets.MNIST(root=dataset_path, download=True, transform=data_transform)
         indices = torch.randperm(len(dataset))[:self.NUM_IMG]
         subset = Subset(dataset, indices)  # take only a subset of the dataset
         return DataLoader(subset, batch_size=self.BATCH_SIZE, shuffle=True)

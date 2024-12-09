@@ -51,9 +51,9 @@ class UNet(nn.Module):
         x2 = self.down1(x1, t)
         x2 = self.sha1(x2)
         x3 = self.down2(x2, t)
-        x3 = self.sha2(x3)
+        # x3 = self.sha2(x3)
         x4 = self.down3(x3, t)
-        x4 = self.sha3(x4)
+        # x4 = self.sha3(x4)
 
         x4 = self.bot1(x4)
         x4 = self.bot2(x4)
@@ -63,8 +63,8 @@ class UNet(nn.Module):
         x = self.up1(x4, x3, t)
         x = self.sha4(x)
         x = self.up2(x, x2, t)
-        x = self.sha5(x)
+        # x = self.sha5(x)
         x = self.up3(x, x1, t)
-        x = self.sha6(x)
+        # x = self.sha6(x)
         output = self.out(x)
         return output
